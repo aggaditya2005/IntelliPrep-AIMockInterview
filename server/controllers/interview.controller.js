@@ -4,6 +4,8 @@ import { askAi } from "../services/openRouter.service.js";
 import User from "../models/user.model.js";
 import Interview from "../models/interview.model.js";
 
+const INTERVIEW_CREDIT_COST = 20;
+
 export const analyzeResume = async (req, res) => {
   try {
     if (!req.file) {
@@ -102,9 +104,9 @@ export const generateQuestion = async (req, res) => {
       });
     }
 
-    if (user.credits < 50) {
+    if (user.credits < INTERVIEW_CREDIT_COST) {
       return res.status(400).json({
-        message: "Not enough credits. Minimum 50 required."
+        message: `Not enough credits. ${INTERVIEW_CREDIT_COST} required to start an interview.`
       });
     }
 
@@ -195,7 +197,7 @@ Make questions based on the candidate’s role, experience,interviewMode, projec
       });
     }
 
-    user.credits -= 50;
+    user.credits -= INTERVIEW_CREDIT_COST;
     await user.save();
 
     const interview = await Interview.create({
@@ -228,77 +230,54 @@ export const submitAnswer = async (req, res) => {
     const { interviewId, questionIndex, answer, timeTaken } = req.body
 
     const interview = await Interview.findById(interviewId)
+    if (!interview || !Number.isInteger(questionIndex) || !interview.questions[questionIndex]) {
+      return res.status(404).json({ message: "Interview question not found." })
+    }
+
     const question = interview.questions[questionIndex]
-
-    // If no answer
-    if (!answer) {
-      question.score = 0;
-      question.feedback = "You did not submit an answer.";
-      question.answer = "";
-
-      await interview.save();
-
-      return res.json({
-        feedback: question.feedback
-      });
-    }
-
-    // If time exceeded
-    if (timeTaken > question.timeLimit) {
-      question.score = 0;
-      question.feedback = "Time limit exceeded. Answer not evaluated.";
-      question.answer = answer;
-
-      await interview.save();
-
-      return res.json({
-        feedback: question.feedback
-      });
-    }
-
+    const candidateAnswer = typeof answer === "string" ? answer.trim() : "";
+    const answerStatus = !candidateAnswer
+      ? "No answer was submitted. Do not evaluate the candidate; assign zero scores and explain the missing response."
+      : timeTaken > question.timeLimit
+        ? "The answer exceeded its time limit. Do not evaluate the candidate; assign zero scores and explain the time limit."
+        : "Evaluate the candidate's answer normally.";
 
     const messages = [
       {
         role: "system",
         content: `
-You are a professional human interviewer evaluating a candidate's answer in a real interview.
+You are an interview coach evaluating a candidate's answer and creating a learning report.
 
-Evaluate naturally and fairly, like a real person would.
+Evaluate fairly using the question and candidate response. Score confidence, communication, and correctness from 0 to 10. Confidence refers only to how directly and assuredly the words express the answer; you receive text, not audio, so do not claim to assess vocal delivery, infer personality, or use facial expressions.
 
-Score the answer in these areas (0 to 10):
+For each scoring area, provide:
+- A concise, specific gap observed in this answer.
+- One practical action the candidate can take to improve.
 
-1. Confidence – Does the answer sound clear, confident, and well-presented?
-2. Communication – Is the language simple, clear, and easy to understand?
-3. Correctness – Is the answer accurate, relevant, and complete?
+Also provide concise overall feedback and an example of a strong answer that directly addresses the question. Interview questions can have multiple valid answers: label the answer as an example, not the only correct answer. Tailor it to the candidate's response when available.
 
-Rules:
-- Be realistic and unbiased.
-- Do not give random high scores.
-- If the answer is weak, score low.
-- If the answer is strong and detailed, score high.
-- Consider clarity, structure, and relevance.
+${answerStatus}
+If the answer is missing or over time, return zero for all scores, explain why in feedback and the gap fields, still give useful improvement actions, and still write the example answer.
 
-Calculate:
-finalScore = average of confidence, communication, and correctness (rounded to nearest whole number).
-
-Feedback Rules:
-- Write natural human feedback.
-- 10 to 15 words only.
-- Sound like real interview feedback.
-- Can suggest improvement if needed.
-- Do NOT repeat the question.
-- Do NOT explain scoring.
-- Keep tone professional and honest.
-
-Return ONLY valid JSON in this format:
+Keep all feedback constructive and specific. Do not invent candidate experience, facts, or achievements in the example answer; use placeholders or describe what a candidate should cover when personal details are unknown.
+Return ONLY valid JSON, with no markdown or extra text, matching this shape:
 
 {
   "confidence": number,
   "communication": number,
   "correctness": number,
   "finalScore": number,
-  "feedback": "short human feedback"
+  "feedback": "concise overall feedback",
+  "confidenceGap": "what was lacking in this answer",
+  "confidenceImprovement": "actionable confidence improvement",
+  "communicationGap": "what was lacking in this answer",
+  "communicationImprovement": "actionable communication improvement",
+  "correctnessGap": "what was incorrect, missing, or unclear",
+  "correctnessImprovement": "actionable correctness improvement",
+  "sampleAnswer": "a concise example strong answer"
 }
+
+For an evaluated answer, finalScore must be the average of confidence, communication, and correctness rounded to the nearest whole number. For missing or over-time answers, all scores and finalScore must be 0.
 `
       }
       ,
@@ -306,7 +285,9 @@ Return ONLY valid JSON in this format:
         role: "user",
         content: `
 Question: ${question.question}
-Answer: ${answer}
+Candidate response: ${candidateAnswer || "[No answer submitted]"}
+Time limit: ${question.timeLimit} seconds
+Time taken: ${timeTaken} seconds
 `
       }
     ];
@@ -317,16 +298,22 @@ Answer: ${answer}
 
     const parsed = JSON.parse(aiResponse);
 
-    question.answer = answer;
+    question.answer = candidateAnswer;
     question.confidence = parsed.confidence;
     question.communication = parsed.communication;
     question.correctness = parsed.correctness;
     question.score = parsed.finalScore;
     question.feedback = parsed.feedback;
+    question.confidenceGap = parsed.confidenceGap;
+    question.confidenceImprovement = parsed.confidenceImprovement;
+    question.communicationGap = parsed.communicationGap;
+    question.communicationImprovement = parsed.communicationImprovement;
+    question.correctnessGap = parsed.correctnessGap;
+    question.correctnessImprovement = parsed.correctnessImprovement;
+    question.sampleAnswer = parsed.sampleAnswer;
     await interview.save();
 
-
-    return res.status(200).json({feedback :parsed.feedback})
+    return res.status(200).json({ feedback: parsed.feedback })
   } catch (error) {
     return res.status(500).json({message:`failed to submit answer ${error}`})
 
@@ -336,11 +323,32 @@ Answer: ${answer}
 
 export const finishInterview = async (req,res) => {
   try {
-    const {interviewId} = req.body
+    const { interviewId } = req.body
+    const proctoring = req.body.proctoring && typeof req.body.proctoring === "object"
+      ? req.body.proctoring
+      : {}
     const interview = await Interview.findById(interviewId)
     if(!interview){
       return res.status(400).json({message:"failed to find Interview"})
     }
+
+    interview.proctoring = {
+      tabAwayCount: Number.isInteger(proctoring.tabAwayCount) && proctoring.tabAwayCount >= 0
+        ? proctoring.tabAwayCount
+        : 0,
+      cameraDisconnectCount: Number.isInteger(proctoring.cameraDisconnectCount) && proctoring.cameraDisconnectCount >= 0
+        ? proctoring.cameraDisconnectCount
+        : 0,
+      multipleFaceCount: Number.isInteger(proctoring.multipleFaceCount) && proctoring.multipleFaceCount >= 0
+        ? proctoring.multipleFaceCount
+        : 0,
+      noFaceCount: Number.isInteger(proctoring.noFaceCount) && proctoring.noFaceCount >= 0
+        ? proctoring.noFaceCount
+        : 0,
+      lookAwayCount: Number.isInteger(proctoring.lookAwayCount) && proctoring.lookAwayCount >= 0
+        ? proctoring.lookAwayCount
+        : 0,
+    };
 
     const totalQuestions = interview.questions.length;
 
@@ -382,13 +390,22 @@ export const finishInterview = async (req,res) => {
       confidence: Number(avgConfidence.toFixed(1)),
       communication: Number(avgCommunication.toFixed(1)),
       correctness: Number(avgCorrectness.toFixed(1)),
+      proctoring: interview.proctoring,
       questionWiseScore: interview.questions.map((q) => ({
         question: q.question,
+        answer: q.answer || "",
         score: q.score || 0,
         feedback: q.feedback || "",
         confidence: q.confidence || 0,
         communication: q.communication || 0,
         correctness: q.correctness || 0,
+        confidenceGap: q.confidenceGap || "",
+        confidenceImprovement: q.confidenceImprovement || "",
+        communicationGap: q.communicationGap || "",
+        communicationImprovement: q.communicationImprovement || "",
+        correctnessGap: q.correctnessGap || "",
+        correctnessImprovement: q.correctnessImprovement || "",
+        sampleAnswer: q.sampleAnswer || "",
       })),
     })
   } catch (error) {
@@ -447,6 +464,13 @@ export const getInterviewReport = async (req,res) => {
       confidence: Number(avgConfidence.toFixed(1)),
       communication: Number(avgCommunication.toFixed(1)),
       correctness: Number(avgCorrectness.toFixed(1)),
+      proctoring: interview.proctoring ?? {
+        tabAwayCount: 0,
+        cameraDisconnectCount: 0,
+        multipleFaceCount: 0,
+        noFaceCount: 0,
+        lookAwayCount: 0,
+      },
       questionWiseScore: interview.questions
     });
 

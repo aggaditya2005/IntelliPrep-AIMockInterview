@@ -10,13 +10,26 @@ import { useEffect } from 'react'
 import axios from "axios"
 import { ServerUrl } from '../App'
 import { BsArrowRight } from 'react-icons/bs'
+import { getGazeDirectionAlert, getFacePose } from '../utils/faceProctoring'
 
 function Step2Interview({ interviewData, onFinish }) {
   const { interviewId, questions, userName } = interviewData;
   const [isIntroPhase, setIsIntroPhase] = useState(true);
 
-  const [isMicOn, setIsMicOn] = useState(true);
+  const [isMicOn, setIsMicOn] = useState(false);
   const recognitionRef = useRef(null);
+  const recognitionActiveRef = useRef(false);
+  const micEnabledRef = useRef(false);
+  const cameraStatusRef = useRef("off");
+  const aiPlayingRef = useRef(false);
+  const micRestartTimeoutRef = useRef(null);
+  const [speechSupported] = useState(
+    () => Boolean(window.SpeechRecognition || window.webkitSpeechRecognition)
+  );
+  const [micError, setMicError] = useState(
+    speechSupported ? "" : "Speech recognition is not supported in this browser. You can type your answers."
+  );
+  const [interimTranscript, setInterimTranscript] = useState("");
   const [isAIPlaying, setIsAIPlaying] = useState(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -32,8 +45,328 @@ function Step2Interview({ interviewData, onFinish }) {
 
 
   const videoRef = useRef(null);
+  const webcamRef = useRef(null);
+  const webcamStreamRef = useRef(interviewData.cameraStream);
+  const faceLandmarkerRef = useRef(interviewData.faceLandmarker);
+  const faceBaselineRef = useRef(interviewData.faceBaseline);
+  const isMountedRef = useRef(true);
+  const proctoringEventsRef = useRef([]);
+  const cameraAlertStateRef = useRef({ candidate: null, since: 0, active: null });
+  const [cameraStatus, setCameraStatus] = useState(
+    interviewData.cameraStream?.active &&
+      interviewData.cameraStream.getVideoTracks().some((track) => track.readyState === "live" && !track.muted)
+      ? "on"
+      : "off"
+  );
+  const [cameraError, setCameraError] = useState("");
+  const [proctoringAlert, setProctoringAlert] = useState("");
 
   const currentQuestion = questions[currentIndex];
+
+  useEffect(() => {
+    cameraStatusRef.current = cameraStatus;
+  }, [cameraStatus]);
+
+  useEffect(() => {
+    micEnabledRef.current = isMicOn;
+  }, [isMicOn]);
+
+  useEffect(() => {
+    aiPlayingRef.current = isAIPlaying;
+  }, [isAIPlaying]);
+
+  const recordProctoringEvent = (type) => {
+    proctoringEventsRef.current = [...proctoringEventsRef.current, type];
+  };
+
+  const startMic = () => {
+    const recognition = recognitionRef.current;
+    if (
+      !recognition ||
+      recognitionActiveRef.current ||
+      !micEnabledRef.current ||
+      cameraStatusRef.current !== "on" ||
+      aiPlayingRef.current
+    ) return;
+
+    try {
+      recognition.start();
+      recognitionActiveRef.current = true;
+      setMicError("");
+    } catch (error) {
+      if (error.name !== "InvalidStateError") {
+        console.error("Unable to start speech recognition:", error);
+        setMicError("Could not start speech recognition. Check microphone permission and try again.");
+      }
+    }
+  };
+
+  const stopMic = () => {
+    clearTimeout(micRestartTimeoutRef.current);
+    micRestartTimeoutRef.current = null;
+    const wasActive = recognitionActiveRef.current;
+    recognitionActiveRef.current = false;
+    if (wasActive) {
+      try {
+        recognitionRef.current?.stop();
+      } catch (error) {
+        if (error.name !== "InvalidStateError") {
+          console.error("Unable to stop speech recognition:", error);
+        }
+      }
+    }
+    setInterimTranscript("");
+  };
+
+  const startWebcam = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera access requires a supported browser and a secure connection.");
+      setCameraStatus("off");
+      return;
+    }
+
+    setCameraError("");
+    setCameraStatus("requesting");
+    try {
+      webcamStreamRef.current?.getTracks().forEach((track) => track.stop());
+      webcamStreamRef.current = null;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: "user" },
+      });
+
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      webcamStreamRef.current = stream;
+      const handleCameraUnavailable = () => {
+        if (webcamStreamRef.current !== stream) return;
+        webcamStreamRef.current = null;
+        stream.getTracks().forEach((track) => track.stop());
+        if (webcamRef.current) {
+          webcamRef.current.srcObject = null;
+        }
+        setCameraStatus("off");
+        setCameraError("The camera disconnected. Reconnect it to continue.");
+        recordProctoringEvent("camera-disconnected");
+      };
+      stream.getVideoTracks().forEach((track) => {
+        track.addEventListener("ended", handleCameraUnavailable, { once: true });
+        track.addEventListener("mute", () => {
+          if (webcamStreamRef.current !== stream) return;
+          setCameraStatus("off");
+          setCameraError("The camera feed paused. Reconnect it to continue.");
+          recordProctoringEvent("camera-disconnected");
+        }, { once: true });
+      });
+      setCameraStatus("connecting");
+    } catch (error) {
+      console.error("Unable to start webcam:", error);
+      setCameraError("Camera access was not available. Check browser permissions and try again.");
+      setCameraStatus("off");
+    }
+  };
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        recordProctoringEvent("tab-hidden");
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    if (!["on", "connecting"].includes(cameraStatus) || !webcamRef.current || !webcamStreamRef.current) return;
+
+    const video = webcamRef.current;
+    const stream = webcamStreamRef.current;
+    let active = true;
+    const handleVideoReady = () => {
+      if (!active || webcamStreamRef.current !== stream || video.videoWidth === 0) return;
+      setCameraError("");
+      setCameraStatus("on");
+    };
+
+    video.muted = true;
+    video.playsInline = true;
+    if (video.srcObject !== stream) video.srcObject = stream;
+    video.addEventListener("loadeddata", handleVideoReady);
+    video.addEventListener("playing", handleVideoReady);
+    video.play().then(handleVideoReady).catch((error) => {
+      console.error("Unable to play webcam preview:", error);
+      setCameraError("The webcam opened but its preview could not start. Reconnect the camera.");
+      setCameraStatus("off");
+    });
+
+    return () => {
+      active = false;
+      video.removeEventListener("loadeddata", handleVideoReady);
+      video.removeEventListener("playing", handleVideoReady);
+    };
+  }, [cameraStatus]);
+
+  useEffect(() => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) return undefined;
+
+    const recognition = new Recognition();
+    recognition.lang = "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+      recognitionActiveRef.current = true;
+      setMicError("");
+    };
+
+    recognition.onresult = (event) => {
+      let finalText = "";
+      let interimText = "";
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const transcript = event.results[index][0].transcript;
+        if (event.results[index].isFinal) {
+          finalText += transcript;
+        } else {
+          interimText += transcript;
+        }
+      }
+
+      if (finalText.trim()) {
+        setAnswer((previous) => `${previous}${previous.trim() ? " " : ""}${finalText.trim()}`);
+      }
+      setInterimTranscript(interimText);
+    };
+
+    recognition.onerror = (event) => {
+      recognitionActiveRef.current = false;
+      if (event.error === "aborted" || event.error === "no-speech") return;
+
+      console.error("Speech recognition error:", event.error);
+      const errorMessages = {
+        "not-allowed": "Microphone permission was denied. Allow microphone access in your browser and try again.",
+        "service-not-allowed": "Speech recognition is blocked by this browser or network.",
+        "audio-capture": "No microphone was found. Connect a microphone and try again.",
+        network: "Speech recognition lost its network connection. Check your connection and try again.",
+      };
+      setMicError(errorMessages[event.error] || "Speech recognition stopped. Try turning the microphone off and on.");
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        micEnabledRef.current = false;
+        setIsMicOn(false);
+      }
+    };
+
+    recognition.onend = () => {
+      recognitionActiveRef.current = false;
+      if (micEnabledRef.current && cameraStatusRef.current === "on" && !aiPlayingRef.current) {
+        micRestartTimeoutRef.current = setTimeout(startMic, 250);
+      }
+    };
+
+    recognitionRef.current = recognition;
+    return () => {
+      clearTimeout(micRestartTimeoutRef.current);
+      micEnabledRef.current = false;
+      recognitionActiveRef.current = false;
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      if (recognitionActiveRef.current) {
+        try {
+          recognition.stop();
+        } catch (error) {
+          if (error.name !== "InvalidStateError") {
+            console.error("Unable to clean up speech recognition:", error);
+          }
+        }
+      }
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (cameraStatus === "on") {
+      if (micEnabledRef.current && !aiPlayingRef.current) {
+        micRestartTimeoutRef.current = setTimeout(startMic, 0);
+      }
+    } else {
+      micRestartTimeoutRef.current = setTimeout(stopMic, 0);
+    }
+
+    return () => clearTimeout(micRestartTimeoutRef.current);
+  }, [cameraStatus]);
+
+  useEffect(() => {
+    if (cameraStatus !== "on" || !webcamRef.current || !faceLandmarkerRef.current) return;
+
+    let active = true;
+    let frameId;
+    let lastVideoTime = -1;
+    const alertMessages = {
+      "no-face": "No face detected. Make sure your face is visible to the webcam.",
+      "multiple-faces": "More than one face is visible. Please make sure you are alone in the frame.",
+      "looking-sideways": "You appear to be looking away from the screen.",
+      "looking-down": "You appear to be looking down for an extended moment.",
+    };
+
+    const analyzeFrame = () => {
+      if (!active) return;
+      const video = webcamRef.current;
+      if (video?.readyState >= 2 && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        const now = performance.now();
+        let faces;
+        try {
+          faces = faceLandmarkerRef.current.detectForVideo(video, now).faceLandmarks;
+        } catch (error) {
+          console.error("Webcam face analysis stopped:", error);
+          setCameraError("Webcam analysis stopped. Reconnect the camera to continue.");
+          setCameraStatus("off");
+          return;
+        }
+        let condition = null;
+
+        if (faces.length === 0) {
+          condition = "no-face";
+        } else if (faces.length > 1) {
+          condition = "multiple-faces";
+        } else {
+          const pose = getFacePose(faces[0]);
+          if (pose && faceBaselineRef.current) {
+            condition = getGazeDirectionAlert(pose, faceBaselineRef.current);
+          }
+        }
+
+        const alertState = cameraAlertStateRef.current;
+        if (condition !== alertState.candidate) {
+          alertState.candidate = condition;
+          alertState.since = now;
+          if (!condition) {
+            alertState.active = null;
+            setProctoringAlert("");
+          }
+        }
+
+        if (condition && now - alertState.since >= 1200 && alertState.active !== condition) {
+          alertState.active = condition;
+          proctoringEventsRef.current = [...proctoringEventsRef.current, condition];
+          setProctoringAlert(alertMessages[condition]);
+        }
+      }
+
+      frameId = requestAnimationFrame(analyzeFrame);
+    };
+
+    frameId = requestAnimationFrame(analyzeFrame);
+    return () => {
+      active = false;
+      cancelAnimationFrame(frameId);
+    };
+  }, [cameraStatus]);
 
 
   useEffect(() => {
@@ -108,6 +441,7 @@ function Step2Interview({ interviewData, onFinish }) {
 
       utterance.onstart = () => {
         setIsAIPlaying(true);
+          aiPlayingRef.current = true;
         stopMic()
         videoRef.current?.play();
       };
@@ -117,10 +451,11 @@ function Step2Interview({ interviewData, onFinish }) {
         videoRef.current?.pause();
         videoRef.current.currentTime = 0;
         setIsAIPlaying(false);
+        aiPlayingRef.current = false;
 
 
 
-        if (isMicOn) {
+        if (micEnabledRef.current) {
           startMic();
         }
         setTimeout(() => {
@@ -179,6 +514,7 @@ function Step2Interview({ interviewData, onFinish }) {
   useEffect(() => {
     if (isIntroPhase) return;
     if (!currentQuestion) return;
+    if (cameraStatus !== "on") return;
     
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
@@ -193,7 +529,7 @@ function Step2Interview({ interviewData, onFinish }) {
 
     return () => clearInterval(timer)
 
-  }, [isIntroPhase, currentIndex])
+  }, [isIntroPhase, currentIndex, cameraStatus])
 
   useEffect(() => {
   if (!isIntroPhase && currentQuestion) {
@@ -202,52 +538,33 @@ function Step2Interview({ interviewData, onFinish }) {
 }, [currentIndex]);
 
 
-  useEffect(() => {
-    if (!("webkitSpeechRecognition" in window)) return;
-
-    const recognition = new window.webkitSpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = false;
-
-    recognition.onresult = (event) => {
-      const transcript =
-        event.results[event.results.length - 1][0].transcript;
-
-      setAnswer((prev) => prev + " " + transcript);
-    };
-
-    recognitionRef.current = recognition;
-
-  }, []);
-
-
-  const startMic = () => {
-    if (recognitionRef.current && !isAIPlaying) {
-      try {
-        recognitionRef.current.start();
-      } catch { }
-    }
-  };
-
-  const stopMic = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-  };
   const toggleMic = () => {
     if (isMicOn) {
+      micEnabledRef.current = false;
       stopMic();
+      setMicError("");
+      setIsMicOn(false);
     } else {
+      micEnabledRef.current = true;
+      setIsMicOn(true);
+      if (!recognitionRef.current) {
+        setMicError("Speech recognition is not available. You can type your answers.");
+        return;
+      }
       startMic();
+      if (!recognitionActiveRef.current) {
+        setMicError("Microphone did not start. Check browser microphone permission and try again.");
+      }
     }
-    setIsMicOn(!isMicOn);
   };
 
 
   const submitAnswer = async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || cameraStatus !== "on") return;
+    const resumeMicAfterFeedback = micEnabledRef.current;
+    micEnabledRef.current = false;
     stopMic()
+    setIsMicOn(false);
     setIsSubmitting(true)
 
     try {
@@ -260,15 +577,20 @@ function Step2Interview({ interviewData, onFinish }) {
       } , {withCredentials:true})
 
       setFeedback(result.data.feedback)
+  micEnabledRef.current = resumeMicAfterFeedback;
+  setIsMicOn(resumeMicAfterFeedback);
       speakText(result.data.feedback)
       setIsSubmitting(false)
     } catch (error) {
 console.log(error)
+micEnabledRef.current = resumeMicAfterFeedback;
+setIsMicOn(resumeMicAfterFeedback);
 setIsSubmitting(false)
     }
   }
 
   const handleNext =async () => {
+    if (cameraStatus !== "on") return;
     setAnswer("");
     setFeedback("");
 
@@ -288,10 +610,18 @@ setIsSubmitting(false)
   }
 
   const finishInterview = async () => {
+    if (cameraStatus !== "on") return;
     stopMic()
     setIsMicOn(false)
     try {
-      const result = await axios.post(ServerUrl+ "/api/interview/finish" , { interviewId} , {withCredentials:true})
+      const proctoring = {
+        tabAwayCount: proctoringEventsRef.current.filter((event) => event === "tab-hidden").length,
+        cameraDisconnectCount: proctoringEventsRef.current.filter((event) => event === "camera-disconnected").length,
+        multipleFaceCount: proctoringEventsRef.current.filter((event) => event === "multiple-faces").length,
+        noFaceCount: proctoringEventsRef.current.filter((event) => event === "no-face").length,
+        lookAwayCount: proctoringEventsRef.current.filter((event) => event === "looking-sideways" || event === "looking-down").length,
+      };
+      const result = await axios.post(ServerUrl+ "/api/interview/finish" , { interviewId, proctoring} , {withCredentials:true})
 
       console.log(result.data)
       onFinish(result.data)
@@ -308,10 +638,16 @@ setIsSubmitting(false)
     if (timeLeft === 0 && !isSubmitting && !feedback) {
       submitAnswer()
     }
-  }, [timeLeft]);
+  }, [timeLeft, cameraStatus]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
+      webcamStreamRef.current?.getTracks().forEach((track) => track.stop());
+      webcamStreamRef.current = null;
+      faceLandmarkerRef.current?.close();
+      faceLandmarkerRef.current = null;
       if (recognitionRef.current) {
         recognitionRef.current.stop();
         recognitionRef.current.abort();
@@ -343,6 +679,51 @@ setIsSubmitting(false)
               preload="auto"
               className="w-full h-auto object-cover"
             />
+          </div>
+
+          <div className='w-full max-w-md rounded-2xl border border-gray-200 bg-white p-4 shadow-sm'>
+            <div className='mb-3 flex items-center justify-between gap-3'>
+              <div>
+                <h3 className='font-semibold text-gray-800'>Required webcam monitoring</h3>
+                <p className='text-xs text-gray-500'>Video is processed locally and is not recorded.</p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${cameraStatus === "on" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
+                {cameraStatus === "on" ? "Camera on" : cameraStatus === "connecting" ? "Connecting..." : cameraStatus === "requesting" ? "Requesting..." : "Camera required"}
+              </span>
+            </div>
+            {["on", "connecting"].includes(cameraStatus) ? (
+              <video
+                ref={webcamRef}
+                autoPlay
+                muted
+                playsInline
+                className='mb-3 aspect-video w-full rounded-xl bg-gray-900 object-cover'
+                aria-label='Your live webcam preview'
+              />
+            ) : (
+              <div className='mb-3 flex aspect-video items-center justify-center rounded-xl bg-gray-900 px-4 text-center text-sm text-white'>
+                {cameraStatus === "requesting" ? "Waiting for camera permission..." : "Reconnect the webcam to continue."}
+              </div>
+            )}
+            {proctoringAlert && (
+              <p role='status' aria-live='polite' className='mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900'>
+                Proctoring warning: {proctoringAlert}
+              </p>
+            )}
+            {cameraError && <p role='alert' className='mb-3 text-sm text-red-600'>{cameraError}</p>}
+            {cameraStatus !== "on" && (
+              <button
+                type='button'
+                onClick={startWebcam}
+                disabled={cameraStatus === "requesting"}
+                className='w-full rounded-xl border border-emerald-600 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-60'
+              >
+                {cameraStatus === "requesting" ? "Waiting for permission..." : "Reconnect webcam"}
+              </button>
+            )}
+            <p className='mt-2 text-xs leading-relaxed text-gray-500'>
+              The timer and answer controls pause if the camera disconnects. Sustained face-count or gaze/head-direction changes trigger warnings; they can be wrong and are not proof of misconduct. The check is not a confidence score. Facial expressions are not analyzed.
+            </p>
           </div>
 
           {/* subtitle */}
@@ -410,19 +791,41 @@ setIsSubmitting(false)
             onChange={(e) => setAnswer(e.target.value)}
             value={answer}
             className="flex-1 bg-gray-100 p-4 sm:p-6 rounded-2xl resize-none outline-none border border-gray-200 focus:ring-2 focus:ring-emerald-500 transition text-gray-800" />
+              {interimTranscript && (
+                <p aria-live='polite' className='mt-2 text-sm text-gray-500'>
+                  Hearing: {interimTranscript}
+                </p>
+              )}
+              {micError && (
+                <p role='alert' className='mt-2 text-sm text-amber-700'>
+                  {micError}
+                </p>
+              )}
+              {!speechSupported && (
+                <p className='mt-2 text-sm text-gray-500'>
+                  Voice transcription is unavailable in this browser; you can type your answer instead.
+                </p>
+              )}
 
 
          {!feedback ? ( <div className='flex items-center gap-4 mt-6'>
             <motion.button
               onClick={toggleMic}
+                  type='button'
+                  aria-label={isMicOn ? "Turn microphone off" : "Turn microphone on"}
+                  aria-pressed={isMicOn}
+                  disabled={!speechSupported || cameraStatus !== "on"}
               whileTap={{ scale: 0.9 }}
-              className='w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-full bg-black text-white shadow-lg'>
+                  className='w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-full bg-black text-white shadow-lg disabled:cursor-not-allowed disabled:opacity-50'>
               {isMicOn ? <FaMicrophone size={20} /> : <FaMicrophoneSlash size={20}/>}
             </motion.button>
+            <span className='text-sm text-gray-600' aria-live='polite'>
+                  {isMicOn ? "Microphone enabled" : "Tap the mic to start voice transcription"}
+            </span>
 
             <motion.button
             onClick={submitAnswer}
-            disabled={isSubmitting}
+            disabled={isSubmitting || cameraStatus !== "on"}
               whileTap={{ scale: 0.95 }}
               className='flex-1 bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 sm:py-4 rounded-2xl shadow-lg hover:opacity-90 transition font-semibold disabled:bg-gray-500'>
               {isSubmitting?"Submitting...":"Submit Answer"}
@@ -438,8 +841,9 @@ setIsSubmitting(false)
 
               <button
               onClick={handleNext}
+              disabled={cameraStatus !== "on"}
 
-               className='w-full bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 rounded-xl shadow-md hover:opacity-90 transition flex items-center justify-center gap-1'>
+               className='w-full bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 rounded-xl shadow-md hover:opacity-90 transition flex items-center justify-center gap-1 disabled:cursor-not-allowed disabled:opacity-60'>
                 Next Question <BsArrowRight size={18}/>
               </button>
 

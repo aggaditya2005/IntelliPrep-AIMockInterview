@@ -6,6 +6,9 @@ import axios from 'axios';
 import { ServerUrl } from '../App';
 import { useDispatch } from 'react-redux';
 import { setUserData } from '../redux/userSlice';
+
+const CREDITS_PER_INTERVIEW = 20;
+
 function Pricing() {
   const navigate = useNavigate()
   const [selectedPlan, setSelectedPlan] = useState("free");
@@ -20,7 +23,7 @@ function Pricing() {
       credits: 100,
       description: "Perfect for beginners starting interview preparation.",
       features: [
-        "100 AI Interview Credits",
+        "5 AI interview sessions (20 credits each)",
         "Basic Performance Report",
         "Voice Interview Access",
         "Limited History Tracking",
@@ -123,6 +126,9 @@ function Pricing() {
           <p className="text-gray-500 mt-3 text-lg">
             Flexible pricing to match your interview preparation goals.
           </p>
+          <p className="mt-3 text-sm font-medium text-emerald-700">
+            Each interview session costs {CREDITS_PER_INTERVIEW} credits. Your free 100-credit plan includes 5 sessions.
+          </p>
         </div>
       </div>
 
@@ -171,7 +177,7 @@ function Pricing() {
                   {plan.price}
                 </span>
                 <p className="text-gray-500 mt-1">
-                  {plan.credits} Credits
+                  {plan.credits} Credits · up to {Math.floor(plan.credits / CREDITS_PER_INTERVIEW)} interviews
                 </p>
               </div>
 

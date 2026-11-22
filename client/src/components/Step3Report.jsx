@@ -23,7 +23,14 @@ function Step3Report({ report }) {
     communication = 0,
     correctness = 0,
     questionWiseScore = [],
+    proctoring,
   } = report;
+
+  const tabAwayCount = proctoring?.tabAwayCount ?? 0;
+  const cameraDisconnectCount = proctoring?.cameraDisconnectCount ?? 0;
+  const multipleFaceCount = proctoring?.multipleFaceCount ?? 0;
+  const noFaceCount = proctoring?.noFaceCount ?? 0;
+  const lookAwayCount = proctoring?.lookAwayCount ?? 0;
 
   const questionScoreData = questionWiseScore.map((score, index) => ({
     name: `Q${index + 1}`,
@@ -31,10 +38,46 @@ function Step3Report({ report }) {
   }))
 
   const skills = [
-    { label: "Confidence", value: confidence },
-    { label: "Communication", value: communication },
-    { label: "Correctness", value: correctness },
+    {
+      label: "Confidence",
+      value: confidence,
+      scoreKey: "confidence",
+      gapKey: "confidenceGap",
+      improvementKey: "confidenceImprovement",
+    },
+    {
+      label: "Communication",
+      value: communication,
+      scoreKey: "communication",
+      gapKey: "communicationGap",
+      improvementKey: "communicationImprovement",
+    },
+    {
+      label: "Correctness",
+      value: correctness,
+      scoreKey: "correctness",
+      gapKey: "correctnessGap",
+      improvementKey: "correctnessImprovement",
+    },
   ];
+
+  const skillInsights = skills.map((skill) => {
+    const weakestQuestions = questionWiseScore
+      .map((question, index) => ({ question, index }))
+      .filter(({ question }) => question[skill.gapKey] || question[skill.improvementKey])
+      .sort((a, b) => (a.question[skill.scoreKey] ?? 10) - (b.question[skill.scoreKey] ?? 10))
+      .slice(0, 2);
+
+    return {
+      ...skill,
+      gaps: weakestQuestions
+        .map(({ question, index }) => `Q${index + 1}: ${question[skill.gapKey]}`)
+        .join("\n") || "Detailed feedback is unavailable for this interview.",
+      improvements: weakestQuestions
+        .map(({ question, index }) => `Q${index + 1}: ${question[skill.improvementKey]}`)
+        .join("\n") || "Detailed feedback is unavailable for this interview.",
+    };
+  });
 
   let performanceText = "";
   let shortTagline = "";
@@ -55,7 +98,7 @@ function Step3Report({ report }) {
 
 
   const downloadPDF = () => {
-  const doc = new jsPDF("p", "mm", "a4");
+  const doc = new jsPDF("l", "mm", "a4");
 
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 20;
@@ -94,17 +137,32 @@ function Step3Report({ report }) {
 
   currentY += 30;
 
-  // ================= SKILLS BOX =================
-  doc.setFillColor(249, 250, 251);
-  doc.roundedRect(margin, currentY, contentWidth, 30, 4, 4, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("Skill-specific feedback", margin, currentY);
+  currentY += 5;
 
-  doc.setFontSize(12);
-
-  doc.text(`Confidence: ${confidence}`, margin + 10, currentY + 10);
-  doc.text(`Communication: ${communication}`, margin + 10, currentY + 18);
-  doc.text(`Correctness: ${correctness}`, margin + 10, currentY + 26);
-
-  currentY += 45;
+  autoTable(doc, {
+    startY: currentY,
+    margin: { left: margin, right: margin },
+    head: [["Skill", "Score", "Observed gap", "How to improve"]],
+    body: skillInsights.map((skill) => [
+      skill.label,
+      `${skill.value}/10`,
+      skill.gaps,
+      skill.improvements,
+    ]),
+    styles: { fontSize: 9, cellPadding: 4, valign: "top", overflow: "linebreak" },
+    headStyles: { fillColor: [34, 197, 94], textColor: 255 },
+    columnStyles: {
+      0: { cellWidth: 30 },
+      1: { cellWidth: 20, halign: "center" },
+      2: { cellWidth: 98 },
+      3: { cellWidth: "auto" },
+    },
+    alternateRowStyles: { fillColor: [249, 250, 251] },
+  });
+  currentY = doc.lastAutoTable.finalY + 12;
 
   // ================= ADVICE =================
   let advice = "";
@@ -133,40 +191,73 @@ function Step3Report({ report }) {
   const splitAdvice = doc.splitTextToSize(advice, contentWidth - 20);
   doc.text(splitAdvice, margin + 10, currentY + 20);
 
-  currentY += 50;
+  currentY += 45;
+
+  if (proctoring) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    doc.text("Proctoring activity (not proof of misconduct)", margin, currentY);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(`Interview tab hidden: ${tabAwayCount}  |  Camera disconnects: ${cameraDisconnectCount}`, margin, currentY + 7);
+    doc.text(`Multiple faces: ${multipleFaceCount}  |  No face: ${noFaceCount}  |  Gaze/head alerts: ${lookAwayCount}`, margin, currentY + 13);
+    currentY += 23;
+  }
 
   // ================= QUESTION TABLE =================
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("Question-by-question learning guide", margin, currentY);
+  currentY += 5;
+
   autoTable(doc, {
   startY: currentY,
   margin: { left: margin, right: margin },
-  head: [["#", "Question", "Score", "Feedback"]],
+  head: [["#", "Question", "Score", "Your answer", "AI feedback", "Example strong answer"]],
   body: questionWiseScore.map((q, i) => [
     `${i + 1}`,
     q.question,
     `${q.score}/10`,
-    q.feedback,
+    q.answer?.trim() || "No answer submitted.",
+    q.feedback || "No feedback available.",
+    q.sampleAnswer || "Example answer unavailable for this interview.",
   ]),
   styles: {
-    fontSize: 9,
-    cellPadding: 5,
+    fontSize: 8,
+    cellPadding: 3,
     valign: "top",
+    overflow: "linebreak",
   },
   headStyles: {
     fillColor: [34, 197, 94],
     textColor: 255,
-    halign: "center",
+    halign: "left",
   },
   columnStyles: {
-    0: { cellWidth: 10, halign: "center" }, // index
-    1: { cellWidth: 55 }, // question
-    2: { cellWidth: 20, halign: "center" }, // score
-    3: { cellWidth: "auto" }, // feedback
+    0: { cellWidth: 8, halign: "center" },
+    1: { cellWidth: 44 },
+    2: { cellWidth: 14, halign: "center" },
+    3: { cellWidth: 48 },
+    4: { cellWidth: 52 },
+    5: { cellWidth: "auto" },
   },
   alternateRowStyles: {
     fillColor: [249, 250, 251],
   },
+  rowPageBreak: "auto",
+  showHead: "everyPage",
 });
 
+  const noteY = doc.lastAutoTable.finalY + 8;
+  if (noteY > doc.internal.pageSize.getHeight() - 15) doc.addPage();
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(9);
+  doc.text(
+    "Example answers are learning guides, not the only correct responses. Adapt them to your own experience.",
+    margin,
+    noteY > doc.internal.pageSize.getHeight() - 15 ? 15 : noteY,
+  );
 
   doc.save("AI_Interview_Report.pdf");
 };
@@ -242,7 +333,7 @@ function Step3Report({ report }) {
 
             <div className='space-y-5'>
               {
-                skills.map((s, i) => (
+                skillInsights.map((s, i) => (
                   <div key={i}>
                     <div className='flex justify-between mb-2 text-sm sm:text-base'>
 
@@ -257,14 +348,61 @@ function Step3Report({ report }) {
                       ></div>
 
                     </div>
+                    <p className='mt-3 text-xs leading-relaxed text-gray-600'>
+                      <span className='font-semibold text-gray-700'>Observed gap: </span>
+                      {s.gaps.replaceAll("\n", " ")}
+                    </p>
+                    <p className='mt-1 text-xs leading-relaxed text-gray-600'>
+                      <span className='font-semibold text-gray-700'>How to improve: </span>
+                      {s.improvements.replaceAll("\n", " ")}
+                    </p>
 
 
                   </div>
                 ))
               }
             </div>
+            <p className='mt-4 text-xs leading-relaxed text-gray-500'>
+              Confidence reflects interview-answer analysis, not facial-expression analysis.
+            </p>
 
           </motion.div>
+
+          {proctoring && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className='rounded-2xl bg-white p-6 shadow-lg sm:rounded-3xl sm:p-8'>
+              <h3 className='mb-4 text-base font-semibold text-gray-700 sm:text-lg'>
+                Proctoring activity
+              </h3>
+              <dl className='space-y-3 text-sm'>
+                <div className='flex justify-between gap-4'>
+                  <dt className='text-gray-600'>Interview tab hidden</dt>
+                  <dd className='font-semibold text-gray-800'>{tabAwayCount}</dd>
+                </div>
+                <div className='flex justify-between gap-4'>
+                  <dt className='text-gray-600'>Camera disconnects</dt>
+                  <dd className='font-semibold text-gray-800'>{cameraDisconnectCount}</dd>
+                </div>
+                <div className='flex justify-between gap-4'>
+                  <dt className='text-gray-600'>Multiple faces detected</dt>
+                  <dd className='font-semibold text-gray-800'>{multipleFaceCount}</dd>
+                </div>
+                <div className='flex justify-between gap-4'>
+                  <dt className='text-gray-600'>Face not detected</dt>
+                  <dd className='font-semibold text-gray-800'>{noFaceCount}</dd>
+                </div>
+                <div className='flex justify-between gap-4'>
+                  <dt className='text-gray-600'>Gaze/head-direction warnings</dt>
+                  <dd className='font-semibold text-gray-800'>{lookAwayCount}</dd>
+                </div>
+              </dl>
+              <p className='mt-4 text-xs leading-relaxed text-gray-500'>
+                These events may have ordinary explanations and are not proof of misconduct. Webcam video is not saved.
+              </p>
+            </motion.div>
+          )}
 
 
         </div>
@@ -341,6 +479,23 @@ function Step3Report({ report }) {
                       {q.feedback && q.feedback.trim() !== ""
                         ? q.feedback
                         : "No feedback available for this question."}
+                    </p>
+                  </div>
+
+                  <div className='mt-4 rounded-lg border border-gray-200 bg-white p-4'>
+                    <p className='mb-1 text-xs font-semibold text-gray-600'>Your answer</p>
+                    <p className='text-sm leading-relaxed text-gray-700'>
+                      {q.answer?.trim() || "No answer was recorded for this question."}
+                    </p>
+                  </div>
+
+                  <div className='mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4'>
+                    <p className='mb-1 text-xs font-semibold text-emerald-700'>Example strong answer</p>
+                    <p className='text-sm leading-relaxed text-gray-700'>
+                      {q.sampleAnswer || "An example answer is unavailable for this interview."}
+                    </p>
+                    <p className='mt-2 text-xs text-gray-500'>
+                      Use this as a guide; there may be many valid ways to answer.
                     </p>
                   </div>
 

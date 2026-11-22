@@ -6,12 +6,14 @@ import {
     FaFileUpload,
     FaMicrophoneAlt,
     FaChartLine,
+    FaVideo,
 } from "react-icons/fa";
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import axios from "axios"
 import { ServerUrl } from '../App';
 import { useDispatch, useSelector } from 'react-redux';
 import { setUserData } from '../redux/userSlice';
+import { averageFacePose, createFaceLandmarker, getFacePose } from '../utils/faceProctoring';
 function Step1SetUp({ onStart }) {
     const {userData}= useSelector((state)=>state.user)
     const dispatch = useDispatch()
@@ -25,7 +27,136 @@ function Step1SetUp({ onStart }) {
     const [resumeText, setResumeText] = useState("");
     const [analysisDone, setAnalysisDone] = useState(false);
     const [analyzing, setAnalyzing] = useState(false);
+    const [cameraStatus, setCameraStatus] = useState("off");
+    const [cameraError, setCameraError] = useState("");
+    const cameraVideoRef = useRef(null);
+    const cameraStreamRef = useRef(null);
+    const faceLandmarkerRef = useRef(null);
+    const faceBaselineRef = useRef(null);
+    const cameraFrameRef = useRef(null);
+    const cameraTransferredRef = useRef(false);
+    const isMountedRef = useRef(true);
 
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            cancelAnimationFrame(cameraFrameRef.current);
+            if (!cameraTransferredRef.current) {
+                cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+                faceLandmarkerRef.current?.close();
+            }
+        };
+    }, []);
+
+    const stopCamera = () => {
+        cancelAnimationFrame(cameraFrameRef.current);
+        cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+        faceLandmarkerRef.current?.close();
+        cameraStreamRef.current = null;
+        faceLandmarkerRef.current = null;
+        faceBaselineRef.current = null;
+        if (cameraVideoRef.current) {
+            cameraVideoRef.current.srcObject = null;
+        }
+        setCameraStatus("off");
+    };
+
+    const startCameraCheck = async () => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+            setCameraError("Camera access requires a supported browser and a secure connection.");
+            setCameraStatus("error");
+            return;
+        }
+
+        stopCamera();
+        setCameraError("");
+        setCameraStatus("requesting");
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: { facingMode: "user" },
+            });
+            if (!isMountedRef.current) {
+                stream.getTracks().forEach((track) => track.stop());
+                return;
+            }
+
+            cameraStreamRef.current = stream;
+            const handleCameraUnavailable = () => {
+                if (cameraStreamRef.current !== stream || cameraTransferredRef.current) return;
+                cancelAnimationFrame(cameraFrameRef.current);
+                setCameraError("The camera disconnected. Restart the camera check to continue.");
+                setCameraStatus("error");
+            };
+            stream.getVideoTracks()[0]?.addEventListener("ended", handleCameraUnavailable, { once: true });
+            stream.getVideoTracks()[0]?.addEventListener("mute", handleCameraUnavailable, { once: true });
+
+            if (!cameraVideoRef.current) {
+                throw new Error("Camera preview is unavailable.");
+            }
+            cameraVideoRef.current.srcObject = stream;
+            await cameraVideoRef.current.play();
+
+            setCameraStatus("loading");
+            const faceLandmarker = await createFaceLandmarker();
+            if (!isMountedRef.current) {
+                faceLandmarker.close();
+                stream.getTracks().forEach((track) => track.stop());
+                return;
+            }
+            if (!stream.active || stream.getVideoTracks()[0]?.muted) {
+                faceLandmarker.close();
+                setCameraError("The camera disconnected. Restart the camera check to continue.");
+                setCameraStatus("error");
+                return;
+            }
+            faceLandmarkerRef.current = faceLandmarker;
+            setCameraStatus("calibrating");
+
+            const calibrationPoses = [];
+            let lastVideoTime = -1;
+            const collectCalibration = () => {
+                if (!isMountedRef.current || !cameraVideoRef.current || !faceLandmarkerRef.current) return;
+                if (!stream.active) {
+                    setCameraError("The camera disconnected. Restart the camera check to continue.");
+                    setCameraStatus("error");
+                    return;
+                }
+                const video = cameraVideoRef.current;
+                if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+                    lastVideoTime = video.currentTime;
+                    let results;
+                    try {
+                        results = faceLandmarker.detectForVideo(video, performance.now());
+                    } catch (error) {
+                        console.error("Face-check calibration failed:", error);
+                        setCameraError("The face check could not analyze the camera. Retry before continuing.");
+                        setCameraStatus("error");
+                        return;
+                    }
+                    const faces = results.faceLandmarks;
+                    if (faces.length === 1) {
+                        const pose = getFacePose(faces[0]);
+                        if (pose) calibrationPoses.push(pose);
+                        if (calibrationPoses.length >= 24) {
+                            faceBaselineRef.current = averageFacePose(calibrationPoses);
+                            setCameraStatus("ready");
+                            return;
+                        }
+                    } else {
+                        calibrationPoses.length = 0;
+                    }
+                }
+                cameraFrameRef.current = requestAnimationFrame(collectCalibration);
+            };
+            cameraFrameRef.current = requestAnimationFrame(collectCalibration);
+        } catch (error) {
+            console.error("Unable to initialize the required webcam check:", error);
+            setCameraError("Camera check failed. Allow camera access and retry; an internet connection is needed to load the face-detection model.");
+            setCameraStatus("error");
+        }
+    };
 
     const handleUploadResume = async () => {
         if (!resumeFile || analyzing) return;
@@ -55,6 +186,14 @@ function Step1SetUp({ onStart }) {
     }
 
     const handleStart = async () => {
+        const videoTrack = cameraStreamRef.current?.getVideoTracks()[0];
+        if (
+            cameraStatus !== "ready" ||
+            !cameraStreamRef.current?.active ||
+            !videoTrack ||
+            videoTrack.muted ||
+            !faceLandmarkerRef.current
+        ) return;
         setLoading(true)
         try {
            const result = await axios.post(ServerUrl + "/api/interview/generate-questions" , {role, experience, mode , resumeText, projects, skills } , {withCredentials:true}) 
@@ -63,7 +202,14 @@ function Step1SetUp({ onStart }) {
             dispatch(setUserData({...userData , credits:result.data.creditsLeft}))
            }
            setLoading(false)
-           onStart(result.data)
+           cameraTransferredRef.current = true;
+           cancelAnimationFrame(cameraFrameRef.current);
+           onStart({
+            ...result.data,
+            cameraStream: cameraStreamRef.current,
+            faceLandmarker: faceLandmarkerRef.current,
+            faceBaseline: faceBaselineRef.current,
+           })
 
         } catch (error) {
             console.log(error)
@@ -173,6 +319,43 @@ function Step1SetUp({ onStart }) {
 
                         </select>
 
+                        <div className='rounded-xl border border-emerald-200 bg-emerald-50 p-4'>
+                            <div className='mb-3 flex items-center gap-2'>
+                                <FaVideo className='text-emerald-700' />
+                                <h3 className='font-semibold text-gray-800'>Required webcam check</h3>
+                            </div>
+                            <video
+                                ref={cameraVideoRef}
+                                autoPlay
+                                muted
+                                playsInline
+                                className='mb-3 aspect-video w-full rounded-lg bg-gray-900 object-cover'
+                                aria-label='Live webcam preview'
+                            />
+                            <p className='mb-3 text-sm text-gray-700' aria-live='polite'>
+                                {cameraStatus === "ready" && "Camera and face check ready."}
+                                {cameraStatus === "requesting" && "Waiting for camera permission..."}
+                                {cameraStatus === "loading" && "Loading the on-device face check..."}
+                                {cameraStatus === "calibrating" && "Center one face and look toward the camera to calibrate."}
+                                {cameraStatus === "off" && "Enable your camera and pass the face check before starting."}
+                                {cameraStatus === "error" && "Camera check unavailable."}
+                            </p>
+                            {cameraError && <p role='alert' className='mb-3 text-sm text-red-700'>{cameraError}</p>}
+                            {cameraStatus !== "ready" && (
+                                <button
+                                    type='button'
+                                    onClick={startCameraCheck}
+                                    disabled={["requesting", "loading", "calibrating"].includes(cameraStatus)}
+                                    className='w-full rounded-lg bg-emerald-700 px-4 py-2 font-semibold text-white hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60'
+                                >
+                                    {cameraStatus === "error" ? "Retry camera check" : "Enable required webcam"}
+                                </button>
+                            )}
+                            <p className='mt-3 text-xs leading-relaxed text-gray-600'>
+                                Webcam access is required to continue. Face checks run in your browser; video is not saved or uploaded. Alerts can be wrong and are not proof of misconduct. The check approximates gaze and head direction, not confidence.
+                            </p>
+                        </div>
+
                         {!analysisDone && (
                             <motion.div
                                 whileHover={{ scale: 1.02 }}
@@ -251,11 +434,11 @@ function Step1SetUp({ onStart }) {
 
                         <motion.button
                         onClick={handleStart}
-                            disabled={!role || !experience || loading}
+                            disabled={!role || !experience || loading || cameraStatus !== "ready"}
                             whileHover={{ scale: 1.03 }}
                             whileTap={{ scale: 0.95 }}
                             className='w-full disabled:bg-gray-600 bg-green-600 hover:bg-green-700 text-white py-3 rounded-full text-lg font-semibold transition duration-300 shadow-md'>
-                            {loading ? "Staring...":"Start Interview"}
+                            {loading ? "Starting..." : "Start Interview"}
 
 
                         </motion.button>

@@ -7,7 +7,10 @@ import {
   BsMic,
   BsClock,
   BsBarChart,
-  BsFileEarmarkText
+  BsFileEarmarkText,
+  BsBriefcase,
+  BsArrowUpRight,
+  BsEnvelope
 } from "react-icons/bs";
 import { HiSparkles } from "react-icons/hi";
 import { useNavigate } from 'react-router-dom';
@@ -28,6 +31,8 @@ function Home() {
   const { userData } = useSelector((state) => state.user)
   const [showAuth, setShowAuth] = useState(false);
   const navigate = useNavigate()
+  const jobAlertsFormUrl = import.meta.env.VITE_N8N_JOB_ALERT_FORM_URL
+    || (import.meta.env.DEV && "http://localhost:5678/form/24adbe6c-d9ba-4707-b359-711ed611af48")
   return (
     <div className='min-h-screen bg-[#f3f3f3] flex flex-col'>
       <Navbar />
@@ -103,6 +108,58 @@ function Home() {
               </motion.button>
             </div>
           </div>
+
+          <motion.section
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            aria-labelledby="job-alerts-title"
+            className="relative overflow-hidden mb-28 rounded-[2rem] bg-gradient-to-br from-green-950 via-green-900 to-emerald-700 p-8 text-white shadow-xl md:p-12"
+          >
+            <div className="pointer-events-none absolute -right-16 -top-20 h-64 w-64 rounded-full border-[32px] border-white/5" />
+            <div className="pointer-events-none absolute -bottom-28 right-1/4 h-64 w-64 rounded-full bg-green-400/10 blur-3xl" />
+
+            <div className="relative flex flex-col items-start justify-between gap-8 md:flex-row md:items-center">
+              <div className="max-w-2xl">
+                <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-green-50">
+                  <HiSparkles size={16} />
+                  Free career feature
+                </div>
+                <h2 id="job-alerts-title" className="text-3xl font-semibold leading-tight md:text-4xl">
+                  Your next opportunity,{" "}
+                  <span className="text-green-200">delivered to your inbox.</span>
+                </h2>
+                <p className="mt-4 max-w-xl leading-relaxed text-green-50/80">
+                  Tell us the roles, locations, skills, experience level, and employment type you prefer.
+                  Get relevant job postings by email—completely free.
+                </p>
+                <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-green-50/80">
+                  <span className="inline-flex items-center gap-2"><BsBriefcase /> Matched to your preferences</span>
+                  <span className="inline-flex items-center gap-2"><BsEnvelope /> Sent to your email</span>
+                </div>
+              </div>
+
+              {jobAlertsFormUrl ? (
+                <a
+                  href={jobAlertsFormUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex shrink-0 items-center gap-3 rounded-full bg-white px-7 py-4 font-semibold text-green-950 shadow-lg transition hover:-translate-y-0.5 hover:bg-green-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+                >
+                  Get free job alerts
+                  <BsArrowUpRight size={18} />
+                </a>
+              ) : (
+                <p className="max-w-56 text-sm text-green-50/80">
+                  Job alerts are being set up. Please check back soon.
+                </p>
+              )}
+            </div>
+            <p className="relative mt-8 border-t border-white/15 pt-5 text-xs text-green-50/70">
+              Complete the form to get started. Your job alerts are delivered by email.
+            </p>
+          </motion.section>
 
           <div className='flex flex-col md:flex-row justify-center items-center gap-10 mb-28'>
             {

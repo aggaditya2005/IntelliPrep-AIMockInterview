@@ -8,9 +8,24 @@ const questionsSchema = new mongoose.Schema({
   feedback: String,
   score: { type: Number, default: 0 },
   confidence: { type: Number, default: 0 },
-communication: { type: Number, default: 0 },
-correctness: { type: Number, default: 0 },
+  communication: { type: Number, default: 0 },
+  correctness: { type: Number, default: 0 },
+  confidenceGap: String,
+  confidenceImprovement: String,
+  communicationGap: String,
+  communicationImprovement: String,
+  correctnessGap: String,
+  correctnessImprovement: String,
+  sampleAnswer: String,
 })
+
+const proctoringSchema = new mongoose.Schema({
+  tabAwayCount: { type: Number, default: 0, min: 0 },
+  cameraDisconnectCount: { type: Number, default: 0, min: 0 },
+  multipleFaceCount: { type: Number, default: 0, min: 0 },
+  noFaceCount: { type: Number, default: 0, min: 0 },
+  lookAwayCount: { type: Number, default: 0, min: 0 },
+}, { _id: false });
 
 
 const interviewSchema = new mongoose.Schema({
@@ -38,6 +53,7 @@ const interviewSchema = new mongoose.Schema({
     questions:[questionsSchema],
 
     finalScore: { type: Number, default: 0 },
+    proctoring: { type: proctoringSchema, default: () => ({}) },
 
     status: {
       type: String,
