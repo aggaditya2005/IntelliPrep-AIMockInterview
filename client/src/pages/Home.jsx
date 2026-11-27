@@ -24,6 +24,7 @@ import evalImg from "../assets/ai-ans.png";
 import resumeImg from "../assets/resume.png";
 import pdfImg from "../assets/pdf.png";
 import analyticsImg from "../assets/history.png";
+import maleAvatarVideo from "../assets/videos/male-ai.mp4";
 import Footer from '../components/Footer';
 
 
@@ -34,80 +35,107 @@ function Home() {
   const jobAlertsFormUrl = import.meta.env.VITE_N8N_JOB_ALERT_FORM_URL
     || (import.meta.env.DEV && "http://localhost:5678/form/24adbe6c-d9ba-4707-b359-711ed611af48")
   return (
-    <div className='min-h-screen bg-[#f3f3f3] flex flex-col'>
+    <div className='min-h-screen bg-[#f8f7fc] flex flex-col'>
       <Navbar />
 
-      <div className='flex-1 px-6 py-20'>
+      <main className='flex-1 px-5 py-12 sm:px-8 sm:py-16'>
         <div className='max-w-6xl mx-auto'>
 
-          <div className='flex justify-center mb-6'>
-            <div className='bg-gray-100 text-gray-600 text-sm px-4 py-2 rounded-full flex items-center gap-2'>
-              <HiSparkles size={16} className="bg-green-50 text-green-600" />
-              AI Powered Smart Interview Platform
+          <section className='grid items-center gap-12 pb-20 md:grid-cols-[1.05fr_0.95fr] md:gap-16 md:pb-28'>
+            <div>
+              <div className='mb-6 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-white px-4 py-2 text-sm font-medium text-emerald-800 shadow-sm'>
+                <HiSparkles size={16} className="text-emerald-600" />
+                AI-powered interview practice
+              </div>
+              <motion.h1
+                initial={{ opacity: 0, y: 30 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6 }}
+                className='max-w-2xl text-4xl font-semibold leading-[1.12] tracking-tight text-slate-950 sm:text-5xl lg:text-6xl'>
+                Walk into your next interview
+                <span className='mt-2 block text-emerald-700'>ready for anything.</span>
+              </motion.h1>
+
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.8 }}
+                className='mt-6 max-w-xl text-base leading-7 text-slate-600 sm:text-lg'>
+                Build confidence with realistic, role-based mock interviews, thoughtful follow-up questions, and feedback that helps you improve.
+              </motion.p>
+
+              <div className='mt-8 flex flex-wrap gap-3'>
+                <motion.button
+                  onClick={() => {
+                    if (!userData) {
+                      setShowAuth(true)
+                      return;
+                    }
+                    navigate("/interview")
+                  }}
+                  whileHover={{ opacity: 0.9, scale: 1.03 }}
+                  whileTap={{ opacity: 1, scale: 0.98 }}
+                  className='rounded-full bg-emerald-800 px-7 py-3.5 font-semibold text-white shadow-lg shadow-emerald-900/15 transition hover:bg-emerald-900'>
+                  Start practicing
+                </motion.button>
+
+                <motion.button
+                  onClick={() => {
+                    if (!userData) {
+                      setShowAuth(true)
+                      return;
+                    }
+                    navigate("/history")
+                  }}
+                  whileHover={{ opacity: 0.9, scale: 1.03 }}
+                  whileTap={{ opacity: 1, scale: 0.98 }}
+                  className='rounded-full border border-slate-200 bg-white px-7 py-3.5 font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50'>
+                  View your progress
+                </motion.button>
+              </div>
+
+              <div className='mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-slate-500'>
+                <span className='inline-flex items-center gap-2'><BsMic className='text-emerald-700' /> Voice-powered practice</span>
+                <span className='inline-flex items-center gap-2'><BsBarChart className='text-emerald-700' /> Actionable feedback</span>
+              </div>
             </div>
 
-
-          </div>
-          <div className='text-center mb-28'>
-            <motion.h1
-              initial={{ opacity: 0, y: 30 }}
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6 }}
-              className='text-4xl md:text-6xl font-semibold leading-tight max-w-4xl mx-auto'>
-              Practice Interviews with
-              <span className='relative inline-block'>
-                <span className='bg-green-100 text-green-600 px-5 py-1 rounded-full'>
-                  AI Intelligence
-
-                </span>
-              </span>
-
-
-
-            </motion.h1>
-
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.8 }}
-              className='text-gray-500 mt-6 max-w-2xl mx-auto text-lg'>
-              Role-based mock interviews with smart follow-ups,
-              adaptive difficulty and real-time performance evaluation.
-
-            </motion.p>
-
-            <div className='flex flex-wrap justify-center gap-4 mt-10'>
-              <motion.button
-                onClick={() => {
-                  if (!userData) {
-                    setShowAuth(true)
-                    return;
-                  }
-                  navigate("/interview")
-                }}
-                whileHover={{ opacity: 0.9, scale: 1.03 }}
-                whileTap={{ opacity: 1, scale: 0.98 }}
-                className='bg-black text-white px-10 py-3 rounded-full hover:opacity-90 transition shadow-md'>
-                Start Interview
-
-              </motion.button>
-
-              <motion.button
-                onClick={() => {
-                  if (!userData) {
-                    setShowAuth(true)
-                    return;
-                  }
-                  navigate("/history")
-                }}
-                whileHover={{ opacity: 0.9, scale: 1.03 }}
-                whileTap={{ opacity: 1, scale: 0.98 }}
-                className='border border-gray-300 px-10 py-3 rounded-full hover:bg-gray-100 transition'>
-                View History
-
-              </motion.button>
-            </div>
-          </div>
+              transition={{ duration: 0.7, delay: 0.1 }}
+              className='relative mx-auto w-full max-w-[500px]'>
+              <div className='absolute -inset-5 rounded-[2.5rem] bg-gradient-to-br from-emerald-100 via-teal-50 to-lime-100 blur-2xl' />
+              <div className='relative overflow-hidden rounded-[2rem] border border-white bg-slate-950 p-3 shadow-2xl shadow-emerald-950/15'>
+                <div className='relative overflow-hidden rounded-[1.5rem] bg-gradient-to-br from-slate-800 to-slate-950'>
+                  <video
+                    className='aspect-[4/4.2] w-full object-cover object-top'
+                    src={maleAvatarVideo}
+                    autoPlay
+                    muted
+                    loop
+                    playsInline
+                    aria-label='AI interviewer avatar preview'
+                  />
+                  <div className='absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-slate-950/20' />
+                  <div className='absolute left-5 right-5 top-5 flex items-center justify-between'>
+                    <span className='rounded-full border border-white/15 bg-slate-950/45 px-3 py-1.5 text-xs font-medium text-white backdrop-blur'>YOUR AI INTERVIEWER</span>
+                    <span className='inline-flex items-center gap-2 rounded-full bg-white/95 px-3 py-1.5 text-xs font-semibold text-slate-700'>
+                      <span className='h-2 w-2 rounded-full bg-emerald-500' /> Ready
+                    </span>
+                  </div>
+                  <div className='absolute inset-x-5 bottom-5'>
+                    <p className='text-sm font-medium text-emerald-200'>PRACTICE, WITH PURPOSE</p>
+                    <p className='mt-1 text-2xl font-semibold text-white'>A more confident you starts here.</p>
+                  </div>
+                </div>
+                <div className='flex items-center justify-between gap-3 px-3 py-4 text-sm text-white'>
+                  <span className='font-medium'>Realistic conversations. Useful feedback.</span>
+                  <span className='flex shrink-0 items-center gap-1.5 text-emerald-300'><BsMic /> Voice ready</span>
+                </div>
+              </div>
+            </motion.div>
+          </section>
 
           <motion.section
             initial={{ opacity: 0, y: 30 }}
@@ -359,7 +387,7 @@ function Home() {
           </div>
 
         </div>
-      </div>
+      </main>
 
       {showAuth && <AuthModel onClose={() => setShowAuth(false)} />}
 

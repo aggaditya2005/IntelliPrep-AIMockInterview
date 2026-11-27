@@ -31,7 +31,7 @@ function Navbar() {
         }
     }
   return (
-    <div className='bg-[#f3f3f3] flex justify-center px-4 pt-6'>
+    <div className='bg-[#f8f7fc] flex justify-center px-4 pt-6'>
         <motion.div 
         initial={{opacity:0 , y:-40}}
         animate={{opacity:1 , y:0}}
@@ -42,7 +42,7 @@ function Navbar() {
                     <BsRobot size={18}/>
 
                 </div>
-                <h1 className='font-semibold hidden md:block text-lg'>InterviewIQ.AI</h1>
+                <h1 className='font-semibold hidden md:block text-lg'>IntelliPrepAI</h1>
             </div>
 
             <div className='flex items-center gap-6  relative'>
@@ -84,7 +84,7 @@ function Navbar() {
 
                     {showUserPopup && (
                         <div className='absolute right-0 mt-3 w-48 bg-white shadow-xl border border-gray-200 rounded-xl p-4 z-50'>
-                            <p className='text-md text-blue-500 font-medium mb-1'>{userData?.name}</p>
+                            <p className='text-md text-violet-600 font-medium mb-1'>{userData?.name}</p>
 
                             <button onClick={()=>navigate("/history")} className='w-full text-left text-sm py-2 hover:text-black text-gray-600'>InterView History</button>
                             <button onClick={handleLogout} 

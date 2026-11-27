@@ -32,7 +32,7 @@ function Auth({isModel = false}) {
   return (
     <div className={`
       w-full 
-      ${isModel ? "py-4" : "min-h-screen bg-[#f3f3f3] flex items-center justify-center px-6 py-20"}
+      ${isModel ? "py-4" : "min-h-screen bg-[#f8f7fc] flex items-center justify-center px-6 py-20"}
     `}>
         <motion.div 
         initial={{opacity:0 , y:-40}} 
@@ -48,7 +48,7 @@ function Auth({isModel = false}) {
                     <BsRobot size={18}/>
 
                 </div>
-                <h2 className='font-semibold text-lg'>InterviewIQ.AI</h2>
+                <h2 className='font-semibold text-lg'>IntelliPrepAI</h2>
             </div>
 
             <h1 className='text-2xl md:text-3xl font-semibold text-center leading-snug mb-4'>

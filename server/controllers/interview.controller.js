@@ -224,10 +224,43 @@ Make questions based on the candidate’s role, experience,interviewMode, projec
   }
 }
 
+const calculateVoiceConfidence = (metrics) => {
+  if (!metrics || typeof metrics !== "object") return 0;
+
+  const duration = Number(metrics.durationSeconds) || 0;
+  const speechRatio = Math.max(0, Math.min(1, Number(metrics.speechRatio) || 0));
+  const averageRms = Number(metrics.averageRms) || 0;
+  const rmsVariation = Number(metrics.rmsCoefficientOfVariation);
+  const pitchVariation = Number(metrics.pitchCoefficientOfVariation);
+
+  if (duration < 1 || speechRatio < 0.05 || averageRms < 0.004) return 0;
+
+  const audibility = averageRms >= 0.012
+    ? 10
+    : Math.max(0, (averageRms / 0.012) * 10);
+  const continuity = speechRatio >= 0.7
+    ? 10
+    : Math.max(0, (speechRatio / 0.7) * 10);
+  const volumeConsistency = Math.max(
+    0,
+    10 - Math.max(0, rmsVariation || 1) * 5
+  );
+  const pitchConsistency = pitchVariation >= 0 && pitchVariation <= 2
+    ? Math.max(0, 10 - pitchVariation * 5)
+    : 5;
+  const durationStability = duration >= 8
+    ? 10
+    : Math.max(4, (duration / 8) * 10);
+
+  return Math.round(
+    (audibility + continuity + volumeConsistency + pitchConsistency + durationStability) / 5
+  );
+};
+
 
 export const submitAnswer = async (req, res) => {
   try {
-    const { interviewId, questionIndex, answer, timeTaken } = req.body
+    const { interviewId, questionIndex, answer, timeTaken, voiceMetrics } = req.body
 
     const interview = await Interview.findById(interviewId)
     if (!interview || !Number.isInteger(questionIndex) || !interview.questions[questionIndex]) {
@@ -236,6 +269,9 @@ export const submitAnswer = async (req, res) => {
 
     const question = interview.questions[questionIndex]
     const candidateAnswer = typeof answer === "string" ? answer.trim() : "";
+    const voiceConfidence = candidateAnswer
+      ? calculateVoiceConfidence(voiceMetrics)
+      : 0;
     const answerStatus = !candidateAnswer
       ? "No answer was submitted. Do not evaluate the candidate; assign zero scores and explain the missing response."
       : timeTaken > question.timeLimit
@@ -248,9 +284,9 @@ export const submitAnswer = async (req, res) => {
         content: `
 You are an interview coach evaluating a candidate's answer and creating a learning report.
 
-Evaluate fairly using the question and candidate response. Score confidence, communication, and correctness from 0 to 10. Confidence refers only to how directly and assuredly the words express the answer; you receive text, not audio, so do not claim to assess vocal delivery, infer personality, or use facial expressions.
+Evaluate fairly using the question and candidate response. Score communication and correctness from 0 to 10. Do not infer confidence, vocal delivery, personality, or emotion from text or facial data. Confidence is calculated separately only from captured voice-signal metrics and must not be changed from the candidate response.
 
-For each scoring area, provide:
+For communication and correctness, provide:
 - A concise, specific gap observed in this answer.
 - One practical action the candidate can take to improve.
 
@@ -286,6 +322,7 @@ For an evaluated answer, finalScore must be the average of confidence, communica
         content: `
 Question: ${question.question}
 Candidate response: ${candidateAnswer || "[No answer submitted]"}
+Voice metrics: ${JSON.stringify(voiceMetrics || {})}
 Time limit: ${question.timeLimit} seconds
 Time taken: ${timeTaken} seconds
 `
@@ -297,6 +334,26 @@ Time taken: ${timeTaken} seconds
 
 
     const parsed = JSON.parse(aiResponse);
+    parsed.confidence = voiceConfidence;
+    if (candidateAnswer && timeTaken <= question.timeLimit) {
+      parsed.finalScore = Math.round(
+        (voiceConfidence + Number(parsed.communication || 0) + Number(parsed.correctness || 0)) / 3
+      );
+    } else {
+      parsed.confidence = 0;
+      parsed.communication = 0;
+      parsed.correctness = 0;
+      parsed.finalScore = 0;
+    }
+
+    parsed.confidenceGap = parsed.confidence > 7
+      ? "Voice delivery was clear and consistent in the captured audio."
+      : parsed.confidence > 4
+        ? "Voice delivery was audible but showed some inconsistency."
+        : "The captured voice signal was quiet, brief, or inconsistent.";
+    parsed.confidenceImprovement = parsed.confidence > 7
+      ? "Maintain a steady volume and speaking pace."
+      : "Speak continuously at a steady volume, with fewer pauses and clear articulation.";
 
     question.answer = candidateAnswer;
     question.confidence = parsed.confidence;

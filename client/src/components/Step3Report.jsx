@@ -302,7 +302,7 @@ function Step3Report({ report }) {
                 text={`${score}/10`}
                 styles={buildStyles({
                   textSize: "18px",
-                  pathColor: "#10b981",
+                  pathColor: "#7c3aed",
                   textColor: "#ef4444",
                   trailColor: "#e5e7eb",
                 })}
@@ -363,7 +363,7 @@ function Step3Report({ report }) {
               }
             </div>
             <p className='mt-4 text-xs leading-relaxed text-gray-500'>
-              Confidence reflects interview-answer analysis, not facial-expression analysis.
+              Confidence is derived from captured voice-signal metrics, not text or facial-expression analysis.
             </p>
 
           </motion.div>
@@ -427,8 +427,8 @@ function Step3Report({ report }) {
                   <Tooltip />
                   <Area type="monotone"
                     dataKey="score"
-                    stroke="#22c55e"
-                    fill="#bbf7d0"
+                    stroke="#7c3aed"
+                    fill="#ddd6fe"
                     strokeWidth={3} />
 
 

@@ -20,6 +20,11 @@ function Step2Interview({ interviewData, onFinish }) {
   const recognitionRef = useRef(null);
   const recognitionActiveRef = useRef(false);
   const micEnabledRef = useRef(false);
+  const audioContextRef = useRef(null);
+  const voiceStreamRef = useRef(null);
+  const voiceAnalyserRef = useRef(null);
+  const voiceIntervalRef = useRef(null);
+  const voiceCaptureRef = useRef(null);
   const cameraStatusRef = useRef("off");
   const aiPlayingRef = useRef(false);
   const micRestartTimeoutRef = useRef(null);
@@ -40,7 +45,7 @@ function Step2Interview({ interviewData, onFinish }) {
   );
   const [selectedVoice, setSelectedVoice] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [voiceGender, setVoiceGender] = useState("female");
+  const [voiceGender, setVoiceGender] = useState("male");
   const [subtitle, setSubtitle] = useState("");
 
 
@@ -116,6 +121,129 @@ function Step2Interview({ interviewData, onFinish }) {
       }
     }
     setInterimTranscript("");
+  };
+
+  const resetVoiceCapture = () => {
+    voiceCaptureRef.current = {
+      startedAt: performance.now(),
+      rmsValues: [],
+      pitchValues: [],
+      speechFrames: 0,
+      totalFrames: 0,
+    };
+  };
+
+  const estimatePitch = (samples, sampleRate) => {
+    let bestOffset = -1;
+    let bestCorrelation = 0;
+    const minOffset = Math.floor(sampleRate / 500);
+    const maxOffset = Math.floor(sampleRate / 80);
+
+    for (let offset = minOffset; offset <= maxOffset; offset += 1) {
+      let correlation = 0;
+      for (let i = 0; i < samples.length - offset; i += 1) {
+        correlation += samples[i] * samples[i + offset];
+      }
+      if (correlation > bestCorrelation) {
+        bestCorrelation = correlation;
+        bestOffset = offset;
+      }
+    }
+
+    return bestOffset > 0 ? sampleRate / bestOffset : 0;
+  };
+
+  const stopVoiceCapture = () => {
+    clearInterval(voiceIntervalRef.current);
+    voiceIntervalRef.current = null;
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    voiceStreamRef.current = null;
+    voiceAnalyserRef.current = null;
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close();
+    }
+    audioContextRef.current = null;
+
+    const capture = voiceCaptureRef.current;
+    if (!capture) return null;
+    const rmsValues = capture.rmsValues;
+    const pitchValues = capture.pitchValues;
+    const average = (values) =>
+      values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+    const variance = (values, mean) =>
+      values.length ? values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length : 0;
+    const rmsAverage = average(rmsValues);
+    const rmsVariance = variance(rmsValues, rmsAverage);
+    const pitchAverage = average(pitchValues);
+    const pitchVariance = variance(pitchValues, pitchAverage);
+    const durationSeconds = Math.max(0, (performance.now() - capture.startedAt) / 1000);
+
+    return {
+      durationSeconds: Number(durationSeconds.toFixed(2)),
+      speechRatio: capture.totalFrames
+        ? Number((capture.speechFrames / capture.totalFrames).toFixed(3))
+        : 0,
+      averageRms: Number(rmsAverage.toFixed(5)),
+      rmsCoefficientOfVariation: rmsAverage
+        ? Number((Math.sqrt(rmsVariance) / rmsAverage).toFixed(3))
+        : 1,
+      averagePitchHz: Number(pitchAverage.toFixed(1)),
+      pitchCoefficientOfVariation: pitchAverage
+        ? Number((Math.sqrt(pitchVariance) / pitchAverage).toFixed(3))
+        : 1,
+    };
+  };
+
+  const startVoiceCapture = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    try {
+      resetVoiceCapture();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      if (!micEnabledRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const context = new AudioContext();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 2048;
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
+      voiceStreamRef.current = stream;
+      voiceAnalyserRef.current = analyser;
+      audioContextRef.current = context;
+
+      const samples = new Float32Array(analyser.fftSize);
+      voiceIntervalRef.current = setInterval(() => {
+        analyser.getFloatTimeDomainData(samples);
+        let energy = 0;
+        for (let i = 0; i < samples.length; i += 1) {
+          energy += samples[i] * samples[i];
+        }
+        const rms = Math.sqrt(energy / samples.length);
+        const capture = voiceCaptureRef.current;
+        if (!capture) return;
+
+        capture.totalFrames += 1;
+        capture.rmsValues.push(rms);
+        if (rms >= 0.012) {
+          capture.speechFrames += 1;
+          const pitch = estimatePitch(samples, context.sampleRate);
+          if (pitch >= 80 && pitch <= 500) capture.pitchValues.push(pitch);
+        }
+      }, 250);
+    } catch (error) {
+      console.error("Unable to start voice analysis:", error);
+      setMicError("Voice analysis could not start. Check microphone permission and try again.");
+    }
   };
 
   const startWebcam = async () => {
@@ -542,13 +670,15 @@ function Step2Interview({ interviewData, onFinish }) {
     if (isMicOn) {
       micEnabledRef.current = false;
       stopMic();
+      stopVoiceCapture();
       setMicError("");
       setIsMicOn(false);
     } else {
       micEnabledRef.current = true;
       setIsMicOn(true);
+      startVoiceCapture();
       if (!recognitionRef.current) {
-        setMicError("Speech recognition is not available. You can type your answers.");
+        setMicError("Speech transcription is not available in this browser. Voice capture is required.");
         return;
       }
       startMic();
@@ -560,10 +690,10 @@ function Step2Interview({ interviewData, onFinish }) {
 
 
   const submitAnswer = async () => {
-    if (isSubmitting || cameraStatus !== "on") return;
-    const resumeMicAfterFeedback = micEnabledRef.current;
+    if (isSubmitting || cameraStatus !== "on" || !isMicOn) return;
     micEnabledRef.current = false;
     stopMic()
+    const voiceMetrics = stopVoiceCapture();
     setIsMicOn(false);
     setIsSubmitting(true)
 
@@ -572,19 +702,16 @@ function Step2Interview({ interviewData, onFinish }) {
         interviewId,
         questionIndex: currentIndex,
         answer,
+        voiceMetrics,
         timeTaken:
           currentQuestion.timeLimit - timeLeft,
       } , {withCredentials:true})
 
       setFeedback(result.data.feedback)
-  micEnabledRef.current = resumeMicAfterFeedback;
-  setIsMicOn(resumeMicAfterFeedback);
       speakText(result.data.feedback)
       setIsSubmitting(false)
     } catch (error) {
 console.log(error)
-micEnabledRef.current = resumeMicAfterFeedback;
-setIsMicOn(resumeMicAfterFeedback);
 setIsSubmitting(false)
     }
   }
@@ -593,6 +720,7 @@ setIsSubmitting(false)
     if (cameraStatus !== "on") return;
     setAnswer("");
     setFeedback("");
+    resetVoiceCapture();
 
     if (currentIndex + 1 >= questions.length) {
       finishInterview();
@@ -644,6 +772,7 @@ setIsSubmitting(false)
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      stopVoiceCapture();
       webcamStreamRef.current?.getTracks().forEach((track) => track.stop());
       webcamStreamRef.current = null;
       faceLandmarkerRef.current?.close();
@@ -668,8 +797,8 @@ setIsSubmitting(false)
       <div className='w-full max-w-350 min-h-[80vh] bg-white rounded-3xl shadow-2xl border border-gray-200 flex flex-col lg:flex-row overflow-hidden'>
 
         {/* video section */}
-        <div className='w-full lg:w-[35%] bg-white flex flex-col items-center p-6 space-y-6 border-r border-gray-200'>
-          <div className='w-full max-w-md rounded-2xl overflow-hidden shadow-xl'>
+        <div className='w-full lg:w-[35%] bg-slate-950 flex flex-col items-center p-6 space-y-6 border-r border-slate-800'>
+          <div className='relative w-full max-w-md overflow-hidden rounded-2xl bg-slate-900 shadow-xl'>
             <video
               src={videoSource}
               key={videoSource}
@@ -677,8 +806,11 @@ setIsSubmitting(false)
               muted
               playsInline
               preload="auto"
-              className="w-full h-auto object-cover"
+              className="aspect-[4/3] w-full object-cover"
             />
+            <div className='absolute left-4 top-4 rounded-full border border-white/15 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold tracking-wide text-white backdrop-blur'>
+              AI INTERVIEWER
+            </div>
           </div>
 
           <div className='w-full max-w-md rounded-2xl border border-gray-200 bg-white p-4 shadow-sm'>
@@ -786,11 +918,11 @@ setIsSubmitting(false)
             <div className='text-base sm:text-lg font-semibold text-gray-800 leading-relaxed '>{currentQuestion?.question}</div>
           </div>)
           }
-          <textarea
-            placeholder="Type your answer here..."
-            onChange={(e) => setAnswer(e.target.value)}
-            value={answer}
-            className="flex-1 bg-gray-100 p-4 sm:p-6 rounded-2xl resize-none outline-none border border-gray-200 focus:ring-2 focus:ring-emerald-500 transition text-gray-800" />
+          <div
+            aria-label="Voice transcription"
+            className="flex-1 min-h-36 bg-gray-100 p-4 sm:p-6 rounded-2xl border border-gray-200 text-gray-800 overflow-y-auto whitespace-pre-wrap">
+            {answer || "Turn on the microphone and speak your answer. Text transcription is for display only."}
+          </div>
               {interimTranscript && (
                 <p aria-live='polite' className='mt-2 text-sm text-gray-500'>
                   Hearing: {interimTranscript}
@@ -803,7 +935,7 @@ setIsSubmitting(false)
               )}
               {!speechSupported && (
                 <p className='mt-2 text-sm text-gray-500'>
-                  Voice transcription is unavailable in this browser; you can type your answer instead.
+                  Voice transcription and voice capture are unavailable in this browser.
                 </p>
               )}
 
@@ -825,7 +957,7 @@ setIsSubmitting(false)
 
             <motion.button
             onClick={submitAnswer}
-            disabled={isSubmitting || cameraStatus !== "on"}
+            disabled={isSubmitting || cameraStatus !== "on" || !isMicOn}
               whileTap={{ scale: 0.95 }}
               className='flex-1 bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 sm:py-4 rounded-2xl shadow-lg hover:opacity-90 transition font-semibold disabled:bg-gray-500'>
               {isSubmitting?"Submitting...":"Submit Answer"}

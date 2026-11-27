@@ -80,7 +80,7 @@ function Pricing() {
       key: import.meta.env.VITE_RAZORPAY_KEY_ID,
       amount: result.data.amount,
       currency: "INR",
-      name: "InterviewIQ.AI",
+      name: "IntelliPrepAI",
       description: `${plan.name} - ${plan.credits} Credits`,
       order_id: result.data.id,
 
@@ -93,7 +93,7 @@ function Pricing() {
 
       },
       theme:{
-        color: "#10b981",
+        color: "#7c3aed",
       },
 
       }
